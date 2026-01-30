@@ -1,8 +1,7 @@
 streamlit
-tensorflow==2.15.0
+tensorflow
 tf-keras
 pillow
-numpy
-opencv-python-headless
+numpy<2
 streamlit-webrtc
 av

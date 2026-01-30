@@ -1,11 +1,11 @@
 import streamlit as st
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import tf_keras
 from tf_keras.layers import DepthwiseConv2D
 import av
-import cv2
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+import threading
 
 
 # Custom DepthwiseConv2D to handle 'groups' parameter issue
@@ -111,24 +111,35 @@ def main():
             "🎥 Click START to begin real-time detection. Allow camera access when prompted."
         )
 
+        # Lock for thread-safe model inference
+        lock = threading.Lock()
+
         # Video processor class for real-time detection
         class FlowerDetector(VideoProcessorBase):
+            def __init__(self):
+                self.result_label = ""
+                self.result_confidence = 0.0
+
             def recv(self, frame):
                 img = frame.to_ndarray(format="bgr24")
 
                 # Convert BGR to RGB for prediction
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img_rgb = img[:, :, ::-1]  # BGR to RGB without cv2
                 pil_image = Image.fromarray(img_rgb)
 
-                # Preprocess and predict
-                processed_img = preprocess_image(pil_image)
-                predictions = model.predict(processed_img, verbose=0)
+                # Thread-safe model inference
+                with lock:
+                    processed_img = preprocess_image(pil_image)
+                    predictions = model.predict(processed_img, verbose=0)
 
                 predicted_class = np.argmax(predictions[0])
                 confidence = float(predictions[0][predicted_class])
                 predicted_label = labels.get(predicted_class, "Unknown")
 
-                # Set color based on confidence
+                self.result_label = predicted_label
+                self.result_confidence = confidence
+
+                # Set color based on confidence (BGR format)
                 if confidence > 0.7:
                     color = (0, 255, 0)  # Green
                 elif confidence > 0.4:
@@ -136,26 +147,22 @@ def main():
                 else:
                     color = (0, 0, 255)  # Red
 
-                # Draw prediction text on frame
-                cv2.putText(
-                    img,
-                    f"{predicted_label}: {confidence * 100:.1f}%",
-                    (10, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.5,
-                    color,
-                    3,
-                )
+                # Draw text on frame using PIL (no cv2 needed)
+                pil_frame = Image.fromarray(img)
+                draw = ImageDraw.Draw(pil_frame)
 
-                # Draw colored border
-                img = cv2.copyMakeBorder(
-                    img, 8, 8, 8, 8, cv2.BORDER_CONSTANT, value=color
-                )
+                # Draw background rectangle for text
+                text = f"{predicted_label}: {confidence * 100:.1f}%"
+                draw.rectangle([5, 5, 350, 50], fill=color)
+                draw.text((10, 10), text, fill=(255, 255, 255))
+
+                # Convert back to numpy array
+                img = np.array(pil_frame)
 
                 return av.VideoFrame.from_ndarray(img, format="bgr24")
 
         # WebRTC streamer for real-time video
-        webrtc_streamer(
+        ctx = webrtc_streamer(
             key="flower-detector",
             mode=WebRtcMode.SENDRECV,
             video_processor_factory=FlowerDetector,
@@ -169,9 +176,9 @@ def main():
         st.markdown(
             """
         **Legend:**
-        - 🟢 Green border = High confidence (>70%)
-        - 🟠 Orange border = Medium confidence (40-70%)
-        - 🔴 Red border = Low confidence (<40%)
+        - 🟢 Green = High confidence (>70%)
+        - 🟠 Orange = Medium confidence (40-70%)
+        - 🔴 Red = Low confidence (<40%)
         """
         )
 
