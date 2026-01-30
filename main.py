@@ -153,8 +153,11 @@ class FlowerDetector(VideoProcessorBase):
 def main():
     global MODEL, LABELS
 
-    st.title("🌸 Real-Time Flower Classification")
-    st.caption("Point your camera at a Tulip, Rose, or Sunflower!")
+    # Simple centered title
+    st.markdown(
+        "<h1 style='text-align: center;'>🌸 Flower Classification</h1>",
+        unsafe_allow_html=True,
+    )
 
     # Initialize session state
     if "detection_count" not in st.session_state:
@@ -164,51 +167,15 @@ def main():
     try:
         MODEL = load_model()
         LABELS = load_labels()
-        st.success("✅ Model loaded successfully!")
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return
-
-    # Sidebar
-    with st.sidebar:
-        st.header("📖 Instructions")
-        st.markdown(
-            """
-        1. Click **START** below
-        2. Allow camera access
-        3. Point camera at a flower
-        4. See real-time predictions!
-        """
-        )
-
-        st.markdown("---")
-        st.header("🎨 Confidence Legend")
-        st.markdown(
-            """
-        - 🟢 **Green** = High (>70%)
-        - 🟠 **Orange** = Medium (40-70%)
-        - 🔴 **Red** = Low (<40%)
-        """
-        )
-
-        st.markdown("---")
-        st.header("🌷 Supported Flowers")
-        st.markdown(
-            """
-        - 🌷 Tulip
-        - 🌹 Rose
-        - 🌻 Sunflower
-        """
-        )
 
     # Main content with tabs
     tab1, tab2 = st.tabs(["📹 Real-Time Detection", "📁 Upload Image"])
 
     with tab1:
-        st.markdown("### 🎥 Live Camera Feed")
-        st.info("Click **START** to begin real-time flower detection!")
-
-        # Create columns to make camera smaller and centered
+        # Create columns to center camera
         col1, col2, col3 = st.columns([1, 2, 1])
 
         with col2:
@@ -232,83 +199,62 @@ def main():
                 },
             )
 
-        # Real-time results display section
-        st.markdown("---")
-        st.markdown("### 📊 Detection Results")
+            # Get latest results from store
+            results = RESULT_STORE.get()
 
-        # Get latest results from store
-        results = RESULT_STORE.get()
+            # Display results below camera (centered)
+            if ctx.state.playing and results["label"]:
+                label = results["label"]
+                conf = results["confidence"]
+                all_results = results["all_results"]
 
-        if ctx.state.playing and results["label"]:
-            label = results["label"]
-            conf = results["confidence"]
-            all_results = results["all_results"]
+                # Top Prediction in blue
+                st.markdown(
+                    f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({conf:.2f})</h3>",
+                    unsafe_allow_html=True,
+                )
 
-            # Main detection display
-            col_a, col_b = st.columns([2, 1])
-
-            with col_a:
-                # Big text showing current detection
-                if conf > 0.7:
-                    st.success(f"### 🌸 {label}")
-                    st.markdown(f"**Confidence: {conf * 100:.1f}%**")
-                elif conf > 0.4:
-                    st.warning(f"### 🤔 {label}")
-                    st.markdown(f"**Confidence: {conf * 100:.1f}%**")
-                else:
-                    st.error(f"### ❓ {label}")
-                    st.markdown(f"**Confidence: {conf * 100:.1f}%**")
-
-            with col_b:
-                # Confidence metric
-                st.metric(label="Confidence", value=f"{conf * 100:.1f}%", delta=None)
-
-            # Progress bar for main prediction
-            st.progress(conf, text=f"{label}: {conf * 100:.1f}%")
-
-            # All predictions breakdown
-            with st.expander("📋 View All Predictions", expanded=True):
+                # All predictions as simple centered text
                 for lbl, prob in all_results:
-                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
-                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
+                    st.markdown(
+                        f"<p style='text-align: center; margin: 5px 0;'>{lbl}: {prob:.2f}</p>",
+                        unsafe_allow_html=True,
+                    )
 
-            # Update counter to trigger re-render
-            st.session_state.detection_count += 1
+                # Update counter to trigger re-render
+                st.session_state.detection_count += 1
 
-        elif ctx.state.playing:
-            st.info("🔍 Camera active... Point at a flower to detect")
-        else:
-            st.info("▶️ Click START above to begin detection")
-
-        # Auto-refresh component (hidden from user)
-        if ctx.state.playing:
-            st.empty()  # Trigger refresh
-
-        st.markdown(
-            """
-        ---
-        **Tips for best results:**
-        - Ensure good lighting
-        - Center the flower in frame
-        - Hold camera steady
-        - Get close to the flower
-        """
-        )
+            elif ctx.state.playing:
+                st.markdown(
+                    "<p style='text-align: center; color: gray;'>🔍 Point camera at a flower to detect...</p>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<p style='text-align: center; color: gray;'>▶️ Click START to begin detection</p>",
+                    unsafe_allow_html=True,
+                )
 
     with tab2:
-        st.markdown("### 📁 Upload an Image")
+        st.markdown(
+            "<h3 style='text-align: center;'>📁 Upload an Image</h3>",
+            unsafe_allow_html=True,
+        )
 
-        uploaded = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        # Center the file uploader
+        col1, col2, col3 = st.columns([1, 2, 1])
 
-        if uploaded:
-            image = Image.open(uploaded)
+        with col2:
+            uploaded = st.file_uploader(
+                "Choose an image...", type=["jpg", "jpeg", "png"]
+            )
 
-            col1, col2 = st.columns([1, 1])
+            if uploaded:
+                image = Image.open(uploaded)
 
-            with col1:
+                # Display image centered
                 st.image(image, caption="Uploaded Image", use_container_width=True)
 
-            with col2:
                 with st.spinner("Analyzing..."):
                     processed = preprocess_image(image)
                     predictions = MODEL.predict(processed, verbose=0)
@@ -322,22 +268,18 @@ def main():
                         key=lambda x: -x[1],
                     )
 
-                # Display results
-                emoji = "🌸" if confidence > 0.7 else "🤔" if confidence > 0.4 else "❓"
+                # Top Prediction in blue
+                st.markdown(
+                    f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({confidence:.2f})</h3>",
+                    unsafe_allow_html=True,
+                )
 
-                if confidence > 0.7:
-                    st.success(f"## {emoji} {label}")
-                elif confidence > 0.4:
-                    st.warning(f"## {emoji} {label}")
-                else:
-                    st.error(f"## {emoji} {label}")
-
-                st.metric("Confidence", f"{confidence * 100:.1f}%")
-
-                st.markdown("**All Predictions:**")
+                # All predictions as simple centered text
                 for lbl, prob in results:
-                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
-                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
+                    st.markdown(
+                        f"<p style='text-align: center; margin: 5px 0;'>{lbl}: {prob:.2f}</p>",
+                        unsafe_allow_html=True,
+                    )
 
 
 if __name__ == "__main__":
