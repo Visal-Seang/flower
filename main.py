@@ -207,6 +207,9 @@ def main():
 
             # Simple text below showing percentage
             st.write(f"{label}: {conf * 100:.1f}%")
+
+            # Progress bar showing confidence
+            st.progress(conf)
         else:
             # Show testing message when camera is on but no detection yet
             st.info("🔍 Testing camera... Point at a flower to detect")
