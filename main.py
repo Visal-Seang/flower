@@ -1,52 +1,15 @@
-"""
-Flower Classification App - Real-Time Detection
-"""
-
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import tf_keras
 from tf_keras.layers import DepthwiseConv2D
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
 import av
-import threading
-from typing import Dict, List, Tuple
 
-# Configuration
-st.set_page_config(
-    page_title="Flower Classification",
-    page_icon="🌸",
-    layout="centered",
-)
-
-MODEL_PATH = "converted_keras/keras_model.h5"
-LABELS_PATH = "converted_keras/labels.txt"
-IMG_SIZE = (224, 224)
+st.set_page_config(page_title="Flower Classification", page_icon="🌸", layout="wide")
 
 
-# Global storage for results
-class ResultStore:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.label = ""
-        self.confidence = 0.0
-        self.all_results = []
-
-    def update(self, label, confidence, all_results):
-        with self.lock:
-            self.label = label
-            self.confidence = confidence
-            self.all_results = all_results
-
-    def get(self):
-        with self.lock:
-            return self.label, self.confidence, self.all_results.copy()
-
-
-RESULT_STORE = ResultStore()
-
-
-# Custom Keras Layer
+# Custom layer for model compatibility
 class CustomDepthwiseConv2D(DepthwiseConv2D):
     def __init__(self, **kwargs):
         kwargs.pop("groups", None)
@@ -55,80 +18,56 @@ class CustomDepthwiseConv2D(DepthwiseConv2D):
 
 @st.cache_resource
 def load_model():
-    try:
-        model = tf_keras.models.load_model(
-            MODEL_PATH,
-            custom_objects={"DepthwiseConv2D": CustomDepthwiseConv2D},
-            compile=False,
-        )
-        return model
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None
+    return tf_keras.models.load_model(
+        "converted_keras/keras_model.h5",
+        custom_objects={"DepthwiseConv2D": CustomDepthwiseConv2D},
+        compile=False,
+    )
 
 
 @st.cache_data
-def load_labels() -> Dict[int, str]:
-    try:
-        labels = {}
-        with open(LABELS_PATH, "r") as f:
-            for line in f:
-                parts = line.strip().split(" ", 1)
-                if len(parts) == 2:
-                    labels[int(parts[0])] = parts[1]
-        return labels
-    except Exception as e:
-        st.error(f"Error loading labels: {str(e)}")
-        return {}
+def load_labels():
+    labels = {}
+    with open("converted_keras/labels.txt", "r") as f:
+        for line in f:
+            parts = line.strip().split(" ", 1)
+            if len(parts) == 2:
+                labels[int(parts[0])] = parts[1]
+    return labels
 
 
-def preprocess_image(image: Image.Image) -> np.ndarray:
+def preprocess_image(image):
     if image.mode != "RGB":
         image = image.convert("RGB")
-    image = image.resize(IMG_SIZE, Image.LANCZOS)
+    image = image.resize((224, 224), Image.LANCZOS)
     arr = np.array(image, dtype=np.float32)
-    arr = (arr / 127.5) - 1.0
+    arr = (arr / 127.5) - 1
     return np.expand_dims(arr, axis=0)
 
 
-def predict_image(image: Image.Image, model, labels: Dict[int, str]):
-    processed = preprocess_image(image)
-    predictions = model.predict(processed, verbose=0)
-
-    predicted_class = np.argmax(predictions[0])
-    confidence = float(predictions[0][predicted_class])
-    label = labels.get(predicted_class, "Unknown")
-
-    all_predictions = sorted(
-        [(labels[i], float(predictions[0][i])) for i in labels],
-        key=lambda x: -x[1],
-    )
-
-    return label, confidence, all_predictions
-
-
-# Global model and labels for video processor
+# Load model and labels globally for the video processor
 MODEL = None
 LABELS = None
+LATEST_RESULT = {"label": "", "confidence": 0.0, "all_results": []}
 
 
 class FlowerDetector(VideoProcessorBase):
     def __init__(self):
         self.model = MODEL
+        self.result_label = ""
+        self.result_confidence = 0.0
         self.labels = LABELS
-        self.frame_count = 0
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        # Convert frame to numpy array (BGR format)
         img = frame.to_ndarray(format="bgr24")
 
-        self.frame_count += 1
-        if self.frame_count % 3 != 0:
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
+        # Convert BGR to RGB for prediction
+        img_rgb = img[:, :, ::-1].copy()
+        pil_image = Image.fromarray(img_rgb)
 
+        # Run prediction
         try:
-            img_rgb = img[:, :, ::-1].copy()
-            pil_image = Image.fromarray(img_rgb)
-
             processed = preprocess_image(pil_image)
             predictions = self.model.predict(processed, verbose=0)
 
@@ -136,35 +75,45 @@ class FlowerDetector(VideoProcessorBase):
             confidence = float(predictions[0][predicted_class])
             label = self.labels.get(predicted_class, "Unknown")
 
+            # Store results globally for display
             all_results = sorted(
                 [(self.labels[i], float(predictions[0][i])) for i in self.labels],
                 key=lambda x: -x[1],
             )
+            LATEST_RESULT["label"] = label
+            LATEST_RESULT["confidence"] = confidence
+            LATEST_RESULT["all_results"] = all_results
 
-            RESULT_STORE.update(label, confidence, all_results)
+            # Choose color based on confidence (BGR format for OpenCV)
+            if confidence > 0.7:
+                color = (0, 255, 0)  # Green
+            elif confidence > 0.4:
+                color = (0, 165, 255)  # Orange
+            else:
+                color = (0, 0, 255)  # Red
 
-            # Draw on frame
+            # Draw result on frame using PIL for better text rendering
             pil_frame = Image.fromarray(img)
             draw = ImageDraw.Draw(pil_frame)
 
-            if confidence > 0.7:
-                color = (0, 255, 0)
-            elif confidence > 0.4:
-                color = (0, 165, 255)
-            else:
-                color = (0, 0, 255)
+            # Draw background rectangle
+            draw.rectangle([10, 10, 400, 70], fill=color)
 
+            # Draw text
             text = f"{label}: {confidence * 100:.1f}%"
-            draw.rectangle([10, 10, 300, 45], fill=color)
-            draw.text((20, 15), text, fill=(255, 255, 255))
+            draw.text((20, 20), text, fill=(255, 255, 255))
 
+            # Draw border around frame
+            border_width = 8
             w, h = pil_frame.size
-            for i in range(5):
-                draw.rectangle([i, i, w - 1 - i, h - 1 - i], outline=color)
+            draw.rectangle([0, 0, w - 1, border_width], fill=color)
+            draw.rectangle([0, h - border_width, w - 1, h - 1], fill=color)
+            draw.rectangle([0, 0, border_width, h - 1], fill=color)
+            draw.rectangle([w - border_width, 0, w - 1, h - 1], fill=color)
 
             img = np.array(pil_frame)
 
-        except Exception:
+        except Exception as e:
             pass
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
@@ -172,142 +121,165 @@ class FlowerDetector(VideoProcessorBase):
 
 def main():
     global MODEL, LABELS
-    # Title
-    st.markdown(
-        "<h1 style='text-align: center;'>🌸 Flower Classification</h1>",
-        unsafe_allow_html=True,
-    )
+
+    st.title("🌸 Real-Time Flower Classification")
+    st.caption("Point your camera at a Tulip, Rose, or Sunflower!")
 
     # Load model and labels
-    MODEL = load_model()
-    LABELS = load_labels()
-
-    if MODEL is None or not LABELS:
-        st.error("Unable to load model or labels.")
+    try:
+        MODEL = load_model()
+        LABELS = load_labels()
+        st.success("✅ Model loaded successfully!")
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
         return
 
-    st.success(f"Model loaded with {len(LABELS)} flower classes")
+    # Sidebar
+    with st.sidebar:
+        st.header("📖 Instructions")
+        st.markdown(
+            """
+        1. Click **START** below
+        2. Allow camera access
+        3. Point camera at a flower
+        4. See real-time predictions!
+        """
+        )
 
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["📹 Real-Time", "📷 Auto-Capture", "📁 Upload"])
+        st.markdown("---")
+        st.header("🎨 Confidence Legend")
+        st.markdown(
+            """
+        - 🟢 **Green** = High (>70%)
+        - 🟠 **Orange** = Medium (40-70%)
+        - 🔴 **Red** = Low (<40%)
+        """
+        )
 
-    # TAB 1: REAL-TIME (WebRTC - works locally, may not work on cloud)
+        st.markdown("---")
+        st.header("🌷 Supported Flowers")
+        st.markdown(
+            """
+        - 🌷 Tulip
+        - 🌹 Rose
+        - 🌻 Sunflower
+        """
+        )
+
+    # Main content with tabs
+    tab1, tab2 = st.tabs(["📹 Real-Time Detection", "📁 Upload Image"])
+
     with tab1:
-        st.markdown("### 📹 Real-Time Detection")
-        st.markdown("Point your camera at a flower for live detection.")
-        st.warning("⚠️ If this doesn't connect, use the **Auto-Capture** tab instead.")
+        st.markdown("### 🎥 Live Camera Feed")
+        st.info("Click **START** to begin real-time flower detection!")
 
-        # WebRTC streamer with free TURN servers
-        ctx = webrtc_streamer(
-            key="flower-detection",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=FlowerDetector,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-            rtc_configuration={
-                "iceServers": [
-                    {"urls": ["stun:stun.l.google.com:19302"]},
-                    {"urls": ["stun:stun1.l.google.com:19302"]},
-                    {
-                        "urls": [
-                            "turn:openrelay.metered.ca:80",
-                            "turn:openrelay.metered.ca:443",
-                            "turn:openrelay.metered.ca:443?transport=tcp",
-                        ],
-                        "username": "openrelayproject",
-                        "credential": "openrelayproject",
+        # Create columns to make camera smaller and centered
+        col1, col2, col3 = st.columns([1, 2, 1])
+
+        with col2:
+            # WebRTC streamer for real-time video with HD quality
+            ctx = webrtc_streamer(
+                key="flower-detection",
+                mode=WebRtcMode.SENDRECV,
+                video_processor_factory=FlowerDetector,
+                media_stream_constraints={
+                    "video": {
+                        "width": {"ideal": 640},
+                        "height": {"ideal": 480},
+                        "frameRate": {"ideal": 30},
+                        "facingMode": "environment",  # Use back camera on mobile
                     },
-                ]
-            },
-        )
-
-        # Display results below video
-        if ctx.state.playing:
-            label, confidence, all_results = RESULT_STORE.get()
-
-            if label:
-                st.markdown(
-                    f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({confidence:.2f})</h3>",
-                    unsafe_allow_html=True,
-                )
-                for lbl, prob in all_results:
-                    st.markdown(
-                        f"<p style='text-align: center;'>{lbl}: {prob:.2f}</p>",
-                        unsafe_allow_html=True,
-                    )
-            else:
-                st.info("🔍 Point camera at a flower...")
-        else:
-            st.info("▶️ Click START to begin real-time detection")
-
-    # TAB 2: AUTO-CAPTURE (Works on Streamlit Cloud!)
-    with tab2:
-        st.markdown("### 📷 Auto-Capture Mode")
-        st.markdown("Camera captures and analyzes automatically every few seconds.")
-        st.info("✅ This mode works on Streamlit Cloud!")
-
-        # Auto-refresh checkbox
-        auto_refresh = st.checkbox(
-            "🔄 Enable Auto-Refresh (captures every 3 seconds)", value=False
-        )
-
-        # Camera input
-        camera_image = st.camera_input("Point at a flower", key="auto_camera")
-
-        if camera_image is not None:
-            image = Image.open(camera_image)
-
-            with st.spinner("Analyzing..."):
-                label, confidence, all_predictions = predict_image(image, MODEL, LABELS)
-
-            # Display results
-            st.markdown(
-                f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({confidence:.2f})</h3>",
-                unsafe_allow_html=True,
+                    "audio": False,
+                },
+                async_processing=True,
+                rtc_configuration={
+                    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+                },
             )
-            for lbl, prob in all_predictions:
-                st.markdown(
-                    f"<p style='text-align: center;'>{lbl}: {prob:.2f}</p>",
-                    unsafe_allow_html=True,
-                )
 
-        # Auto-refresh using st.rerun
-        if auto_refresh and camera_image is not None:
-            import time
+        # Display detection results as text
+        st.markdown("---")
+        st.markdown("### 📊 Detection Results")
 
-            time.sleep(3)
-            st.rerun()
+        result_col1, result_col2 = st.columns([1, 1])
 
-    # TAB 3: UPLOAD IMAGE
-    with tab3:
+        with result_col1:
+            if LATEST_RESULT["label"]:
+                conf = LATEST_RESULT["confidence"]
+                label = LATEST_RESULT["label"]
+
+                if conf > 0.7:
+                    st.success(f"## 🌸 {label}")
+                elif conf > 0.4:
+                    st.warning(f"## 🤔 {label}")
+                else:
+                    st.error(f"## ❓ {label}")
+
+                st.metric("Confidence", f"{conf * 100:.1f}%")
+            else:
+                st.info("Waiting for detection... Start the camera!")
+
+        with result_col2:
+            if LATEST_RESULT["all_results"]:
+                st.markdown("**All Predictions:**")
+                for lbl, prob in LATEST_RESULT["all_results"]:
+                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
+                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
+
+        st.markdown(
+            """
+        ---
+        **Tips for best results:**
+        - Ensure good lighting
+        - Center the flower in frame
+        - Hold camera steady
+        - Get close to the flower
+        """
+        )
+
+    with tab2:
         st.markdown("### 📁 Upload an Image")
 
-        uploaded_file = st.file_uploader(
-            "Choose an image...",
-            type=["jpg", "jpeg", "png"],
-        )
+        uploaded = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
-        if uploaded_file:
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image", use_container_width=True)
+        if uploaded:
+            image = Image.open(uploaded)
 
-            with st.spinner("Analyzing..."):
-                label, confidence, all_predictions = predict_image(image, MODEL, LABELS)
+            col1, col2 = st.columns([1, 1])
 
-            st.markdown("---")
+            with col1:
+                st.image(image, caption="Uploaded Image", use_container_width=True)
 
-            # Top prediction in blue
-            st.markdown(
-                f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({confidence:.2f})</h3>",
-                unsafe_allow_html=True,
-            )
+            with col2:
+                with st.spinner("Analyzing..."):
+                    processed = preprocess_image(image)
+                    predictions = MODEL.predict(processed, verbose=0)
 
-            # All predictions
-            for lbl, prob in all_predictions:
-                st.markdown(
-                    f"<p style='text-align: center; margin: 5px 0;'>{lbl}: {prob:.2f}</p>",
-                    unsafe_allow_html=True,
-                )
+                    predicted_class = np.argmax(predictions[0])
+                    confidence = float(predictions[0][predicted_class])
+                    label = LABELS.get(predicted_class, "Unknown")
+
+                    results = sorted(
+                        [(LABELS[i], float(predictions[0][i])) for i in LABELS],
+                        key=lambda x: -x[1],
+                    )
+
+                # Display results
+                emoji = "🌸" if confidence > 0.7 else "🤔" if confidence > 0.4 else "❓"
+
+                if confidence > 0.7:
+                    st.success(f"## {emoji} {label}")
+                elif confidence > 0.4:
+                    st.warning(f"## {emoji} {label}")
+                else:
+                    st.error(f"## {emoji} {label}")
+
+                st.metric("Confidence", f"{confidence * 100:.1f}%")
+
+                st.markdown("**All Predictions:**")
+                for lbl, prob in results:
+                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
+                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
 
 
 if __name__ == "__main__":
