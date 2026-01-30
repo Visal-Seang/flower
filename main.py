@@ -198,33 +198,15 @@ def main():
             )
 
         # Display detection results as text
-        st.markdown("---")
-        st.markdown("### 📊 Detection Results")
+        if LATEST_RESULT["label"]:
+            conf = LATEST_RESULT["confidence"]
+            label = LATEST_RESULT["label"]
 
-        result_col1, result_col2 = st.columns([1, 1])
+            st.success(f"**Detected: {label}** (Confidence: {conf * 100:.1f}%)")
 
-        with result_col1:
-            if LATEST_RESULT["label"]:
-                conf = LATEST_RESULT["confidence"]
-                label = LATEST_RESULT["label"]
-
-                if conf > 0.7:
-                    st.success(f"## 🌸 {label}")
-                elif conf > 0.4:
-                    st.warning(f"## 🤔 {label}")
-                else:
-                    st.error(f"## ❓ {label}")
-
-                st.metric("Confidence", f"{conf * 100:.1f}%")
-            else:
-                st.info("Waiting for detection... Start the camera!")
-
-        with result_col2:
-            if LATEST_RESULT["all_results"]:
-                st.markdown("**All Predictions:**")
-                for lbl, prob in LATEST_RESULT["all_results"]:
-                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
-                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
+            # Show all predictions as simple text
+            for lbl, prob in LATEST_RESULT["all_results"]:
+                st.write(f"{lbl}: {prob * 100:.1f}%")
 
         st.markdown(
             """
