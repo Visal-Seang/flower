@@ -189,14 +189,15 @@ def main():
     st.success(f"Model loaded with {len(LABELS)} flower classes")
 
     # Tabs
-    tab1, tab2 = st.tabs(["📹 Real-Time", "📁 Upload Image"])
+    tab1, tab2, tab3 = st.tabs(["📹 Real-Time", "📷 Auto-Capture", "📁 Upload"])
 
-    # TAB 1: REAL-TIME
+    # TAB 1: REAL-TIME (WebRTC - works locally, may not work on cloud)
     with tab1:
         st.markdown("### 📹 Real-Time Detection")
         st.markdown("Point your camera at a flower for live detection.")
+        st.warning("⚠️ If this doesn't connect, use the **Auto-Capture** tab instead.")
 
-        # WebRTC streamer
+        # WebRTC streamer with free TURN servers
         ctx = webrtc_streamer(
             key="flower-detection",
             mode=WebRtcMode.SENDRECV,
@@ -207,6 +208,15 @@ def main():
                 "iceServers": [
                     {"urls": ["stun:stun.l.google.com:19302"]},
                     {"urls": ["stun:stun1.l.google.com:19302"]},
+                    {
+                        "urls": [
+                            "turn:openrelay.metered.ca:80",
+                            "turn:openrelay.metered.ca:443",
+                            "turn:openrelay.metered.ca:443?transport=tcp",
+                        ],
+                        "username": "openrelayproject",
+                        "credential": "openrelayproject",
+                    },
                 ]
             },
         )
@@ -230,8 +240,46 @@ def main():
         else:
             st.info("▶️ Click START to begin real-time detection")
 
-    # TAB 2: UPLOAD IMAGE
+    # TAB 2: AUTO-CAPTURE (Works on Streamlit Cloud!)
     with tab2:
+        st.markdown("### 📷 Auto-Capture Mode")
+        st.markdown("Camera captures and analyzes automatically every few seconds.")
+        st.info("✅ This mode works on Streamlit Cloud!")
+
+        # Auto-refresh checkbox
+        auto_refresh = st.checkbox(
+            "🔄 Enable Auto-Refresh (captures every 3 seconds)", value=False
+        )
+
+        # Camera input
+        camera_image = st.camera_input("Point at a flower", key="auto_camera")
+
+        if camera_image is not None:
+            image = Image.open(camera_image)
+
+            with st.spinner("Analyzing..."):
+                label, confidence, all_predictions = predict_image(image, MODEL, LABELS)
+
+            # Display results
+            st.markdown(
+                f"<h3 style='text-align: center; color: #1E88E5;'>Top Prediction: {label} ({confidence:.2f})</h3>",
+                unsafe_allow_html=True,
+            )
+            for lbl, prob in all_predictions:
+                st.markdown(
+                    f"<p style='text-align: center;'>{lbl}: {prob:.2f}</p>",
+                    unsafe_allow_html=True,
+                )
+
+        # Auto-refresh using st.rerun
+        if auto_refresh and camera_image is not None:
+            import time
+
+            time.sleep(3)
+            st.rerun()
+
+    # TAB 3: UPLOAD IMAGE
+    with tab3:
         st.markdown("### 📁 Upload an Image")
 
         uploaded_file = st.file_uploader(
