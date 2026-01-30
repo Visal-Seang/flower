@@ -156,7 +156,7 @@ def create_realtime_camera():
         // startCamera();
     </script>
     """
-    
+
     return components.html(html_code, height=650)
 
 
@@ -230,46 +230,52 @@ def main():
         )
 
     # Main content with tabs
-    tab1, tab2, tab3 = st.tabs(["🎥 Real-Time Detection", "📸 Camera Capture", "📁 Upload Image"])
+    tab1, tab2, tab3 = st.tabs(
+        ["🎥 Real-Time Detection", "📸 Camera Capture", "📁 Upload Image"]
+    )
 
     with tab1:
         st.markdown("### 🎥 Real-Time Flower Detection")
         st.info("Click 'Start Camera' to begin continuous flower detection!")
-        
+
         col1, col2 = st.columns([3, 2])
-        
+
         with col1:
             # Real-time camera component
             image_data = create_realtime_camera()
-        
+
         with col2:
             st.markdown("### 📊 Live Results")
-            
+
             # Initialize session state for results
-            if 'last_prediction' not in st.session_state:
+            if "last_prediction" not in st.session_state:
                 st.session_state.last_prediction = None
-            
+
             # Process captured frame if available
             if image_data:
                 try:
                     # Decode base64 image
-                    image_data_clean = image_data.split(',')[1] if ',' in image_data else image_data
+                    image_data_clean = (
+                        image_data.split(",")[1] if "," in image_data else image_data
+                    )
                     image_bytes = base64.b64decode(image_data_clean)
                     image = Image.open(BytesIO(image_bytes))
-                    
+
                     # Make prediction
-                    label, confidence, all_results = predict_flower(image, model, labels)
+                    label, confidence, all_results = predict_flower(
+                        image, model, labels
+                    )
                     st.session_state.last_prediction = (label, confidence, all_results)
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-            
+
             # Display last prediction
             if st.session_state.last_prediction:
                 label, confidence, all_results = st.session_state.last_prediction
                 display_results(label, confidence, all_results)
             else:
                 st.info("👆 Start the camera to see predictions!")
-        
+
         st.markdown(
             """
         ---
