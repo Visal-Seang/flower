@@ -48,11 +48,14 @@ def preprocess_image(image):
 # Load model and labels globally for the video processor
 MODEL = None
 LABELS = None
+LATEST_RESULT = {"label": "", "confidence": 0.0, "all_results": []}
 
 
 class FlowerDetector(VideoProcessorBase):
     def __init__(self):
         self.model = MODEL
+        self.result_label = ""
+        self.result_confidence = 0.0
         self.labels = LABELS
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
@@ -71,6 +74,15 @@ class FlowerDetector(VideoProcessorBase):
             predicted_class = np.argmax(predictions[0])
             confidence = float(predictions[0][predicted_class])
             label = self.labels.get(predicted_class, "Unknown")
+
+            # Store results globally for display
+            all_results = sorted(
+                [(self.labels[i], float(predictions[0][i])) for i in self.labels],
+                key=lambda x: -x[1],
+            )
+            LATEST_RESULT["label"] = label
+            LATEST_RESULT["confidence"] = confidence
+            LATEST_RESULT["all_results"] = all_results
 
             # Choose color based on confidence (BGR format for OpenCV)
             if confidence > 0.7:
@@ -166,7 +178,7 @@ def main():
 
         with col2:
             # WebRTC streamer for real-time video with HD quality
-            webrtc_streamer(
+            ctx = webrtc_streamer(
                 key="flower-detection",
                 mode=WebRtcMode.SENDRECV,
                 video_processor_factory=FlowerDetector,
@@ -184,6 +196,35 @@ def main():
                     "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
                 },
             )
+
+        # Display detection results as text
+        st.markdown("---")
+        st.markdown("### 📊 Detection Results")
+
+        result_col1, result_col2 = st.columns([1, 1])
+
+        with result_col1:
+            if LATEST_RESULT["label"]:
+                conf = LATEST_RESULT["confidence"]
+                label = LATEST_RESULT["label"]
+
+                if conf > 0.7:
+                    st.success(f"## 🌸 {label}")
+                elif conf > 0.4:
+                    st.warning(f"## 🤔 {label}")
+                else:
+                    st.error(f"## ❓ {label}")
+
+                st.metric("Confidence", f"{conf * 100:.1f}%")
+            else:
+                st.info("Waiting for detection... Start the camera!")
+
+        with result_col2:
+            if LATEST_RESULT["all_results"]:
+                st.markdown("**All Predictions:**")
+                for lbl, prob in LATEST_RESULT["all_results"]:
+                    icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
+                    st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
 
         st.markdown(
             """
