@@ -3,4 +3,3 @@ tensorflow
 tf-keras
 pillow
 numpy
-opencv-python-headless

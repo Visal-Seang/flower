@@ -3,8 +3,6 @@ import numpy as np
 from PIL import Image
 import tf_keras
 from tf_keras.layers import DepthwiseConv2D
-import cv2
-import time
 
 
 # Custom DepthwiseConv2D to handle 'groups' parameter issue
@@ -105,98 +103,35 @@ def main():
     tab1, tab2 = st.tabs(["📷 Webcam", "📁 Upload Image"])
 
     with tab1:
-        st.write("### Real-time Flower Detection")
+        st.write("### Take a Photo for Flower Detection")
 
-        # Webcam controls
-        col1, col2 = st.columns(2)
-        with col1:
-            start_webcam = st.button("🎥 Start Webcam", use_container_width=True)
-        with col2:
-            stop_webcam = st.button("⏹️ Stop Webcam", use_container_width=True)
+        # Use Streamlit's camera input (works on cloud)
+        camera_image = st.camera_input("📷 Take a picture")
 
-        # Initialize session state for webcam
-        if "webcam_running" not in st.session_state:
-            st.session_state.webcam_running = False
+        if camera_image is not None:
+            # Open the captured image
+            image = Image.open(camera_image)
 
-        if start_webcam:
-            st.session_state.webcam_running = True
-        if stop_webcam:
-            st.session_state.webcam_running = False
+            col1, col2 = st.columns(2)
 
-        # Placeholders for webcam feed and results
-        frame_placeholder = st.empty()
-        result_placeholder = st.empty()
-        progress_placeholder = st.empty()
+            with col1:
+                st.image(image, caption="Captured Image", use_container_width=True)
 
-        if st.session_state.webcam_running:
-            cap = cv2.VideoCapture(0)
-
-            if not cap.isOpened():
-                st.error(
-                    "❌ Could not open webcam. Please check your camera connection."
-                )
-            else:
-                st.info("📸 Webcam is running... Press 'Stop Webcam' to end.")
-
-                while st.session_state.webcam_running:
-                    ret, frame = cap.read()
-
-                    if not ret:
-                        st.error("Failed to capture frame from webcam")
-                        break
-
-                    # Convert BGR to RGB
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                    # Convert to PIL Image for prediction
-                    pil_image = Image.fromarray(frame_rgb)
-
-                    # Make prediction
+            with col2:
+                # Make prediction
+                with st.spinner("Analyzing..."):
                     predicted_label, confidence, all_results = predict_flower(
-                        model, pil_image, labels
+                        model, image, labels
                     )
 
-                    # Draw prediction on frame
-                    cv2.putText(
-                        frame_rgb,
-                        f"{predicted_label}: {confidence * 100:.1f}%",
-                        (10, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1.2,
-                        (0, 255, 0),
-                        3,
-                    )
+                # Display results
+                st.success(f"**Prediction: {predicted_label}**")
+                st.metric("Confidence", f"{confidence * 100:.2f}%")
 
-                    # Add colored border based on confidence
-                    border_color = (
-                        (0, 255, 0)
-                        if confidence > 0.7
-                        else (255, 165, 0) if confidence > 0.4 else (255, 0, 0)
-                    )
-                    frame_rgb = cv2.copyMakeBorder(
-                        frame_rgb, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=border_color
-                    )
-
-                    # Display frame
-                    frame_placeholder.image(
-                        frame_rgb, channels="RGB", use_container_width=True
-                    )
-
-                    # Display results
-                    with result_placeholder.container():
-                        st.success(
-                            f"**Detected: {predicted_label}** (Confidence: {confidence * 100:.1f}%)"
-                        )
-
-                    # Display progress bars for all predictions
-                    with progress_placeholder.container():
-                        for label, prob in all_results:
-                            st.progress(float(prob), text=f"{label}: {prob * 100:.1f}%")
-
-                    # Small delay to reduce CPU usage
-                    time.sleep(0.1)
-
-                cap.release()
+                # Show all predictions
+                st.write("**All Predictions:**")
+                for label, prob in all_results:
+                    st.progress(float(prob), text=f"{label}: {prob * 100:.2f}%")
 
     with tab2:
         # File uploader - only accepts single image
