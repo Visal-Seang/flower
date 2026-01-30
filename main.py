@@ -3,9 +3,7 @@ import numpy as np
 from PIL import Image
 import tf_keras
 from tf_keras.layers import DepthwiseConv2D
-import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
-import cv2
+import time
 
 
 # Custom DepthwiseConv2D to handle 'groups' parameter issue
@@ -107,67 +105,66 @@ def main():
 
     with tab1:
         st.write("### Real-time Flower Detection")
-        st.info("Allow camera access and click START to begin real-time detection")
 
-        # Create a class to process video frames
-        class VideoProcessor:
-            def __init__(self):
-                self.model = model
-                self.labels = labels
-                self.result_text = ""
-                self.confidence = 0.0
+        # Use session state to control the camera
+        if "run_camera" not in st.session_state:
+            st.session_state.run_camera = False
 
-            def recv(self, frame):
-                img = frame.to_ndarray(format="bgr24")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🎥 Start Detection", use_container_width=True):
+                st.session_state.run_camera = True
+        with col2:
+            if st.button("⏹️ Stop Detection", use_container_width=True):
+                st.session_state.run_camera = False
 
-                # Convert BGR to RGB
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Camera input placeholder
+        camera_placeholder = st.empty()
+        result_placeholder = st.empty()
+        progress_placeholder = st.empty()
 
-                # Convert to PIL Image for prediction
-                pil_image = Image.fromarray(img_rgb)
+        if st.session_state.run_camera:
+            st.info("📸 Camera is running... Point at a flower!")
+
+            # Continuous camera capture
+            camera_image = camera_placeholder.camera_input(
+                "Point camera at a flower", key=f"camera_{time.time()}"
+            )
+
+            if camera_image is not None:
+                image = Image.open(camera_image)
 
                 # Make prediction
-                processed_img = preprocess_image(pil_image)
-                predictions = self.model.predict(processed_img, verbose=0)
-
-                predicted_class = np.argmax(predictions[0])
-                confidence = predictions[0][predicted_class]
-                predicted_label = self.labels[predicted_class]
-
-                # Draw prediction on frame
-                color = (
-                    (0, 255, 0)
-                    if confidence > 0.7
-                    else (0, 165, 255) if confidence > 0.4 else (0, 0, 255)
+                predicted_label, confidence, all_results = predict_flower(
+                    model, image, labels
                 )
 
-                cv2.putText(
-                    img,
-                    f"{predicted_label}: {confidence * 100:.1f}%",
-                    (10, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    color,
-                    3,
-                )
+                # Display results
+                with result_placeholder.container():
+                    if confidence > 0.7:
+                        st.success(
+                            f"🌸 **{predicted_label}** - Confidence: {confidence * 100:.1f}%"
+                        )
+                    elif confidence > 0.4:
+                        st.warning(
+                            f"🤔 **{predicted_label}** - Confidence: {confidence * 100:.1f}%"
+                        )
+                    else:
+                        st.error(
+                            f"❓ **{predicted_label}** - Confidence: {confidence * 100:.1f}%"
+                        )
 
-                # Add colored border based on confidence
-                img = cv2.copyMakeBorder(
-                    img, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=color
-                )
+                # Display progress bars for all predictions
+                with progress_placeholder.container():
+                    st.write("**All Predictions:**")
+                    for label, prob in all_results:
+                        st.progress(float(prob), text=f"{label}: {prob * 100:.1f}%")
 
-                return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-        webrtc_streamer(
-            key="flower-detection",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=VideoProcessor,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-            rtc_configuration={
-                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-            },
-        )
+                # Auto-refresh to simulate continuous detection
+                time.sleep(0.5)
+                st.rerun()
+        else:
+            st.write("👆 Click **Start Detection** to begin")
 
     with tab2:
         # File uploader - only accepts single image
