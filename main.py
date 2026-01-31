@@ -1,14 +1,21 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import numpy as np
 from PIL import Image
 import tf_keras
 from tf_keras.layers import DepthwiseConv2D
-import base64
-from io import BytesIO
-import time
+import av
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import threading
 
 st.set_page_config(page_title="Flower Classification", page_icon="🌸", layout="wide")
+
+# WebRTC Configuration
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+# Global lock for thread-safe operations
+prediction_lock = threading.Lock()
 
 
 # Custom layer for model compatibility
@@ -83,99 +90,53 @@ def display_results(label, confidence, all_results):
         st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
 
 
-def create_realtime_camera():
-    """Create HTML5 video component for real-time capture"""
-    html_code = """
-    <div style="text-align: center;">
-        <video id="video" width="640" height="480" autoplay style="border: 3px solid #4CAF50; border-radius: 10px;"></video>
-        <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-        <br><br>
-        <button onclick="startCamera()" style="padding: 10px 20px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 5px;">
-            📹 Start Camera
-        </button>
-        <button onclick="stopCamera()" style="padding: 10px 20px; font-size: 16px; background: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 5px;">
-            ⏹️ Stop Camera
-        </button>
-        <br>
-        <p id="status" style="margin-top: 10px; font-weight: bold;"></p>
-    </div>
-    
-    <script>
-        let video = document.getElementById('video');
-        let canvas = document.getElementById('canvas');
-        let context = canvas.getContext('2d');
-        let stream = null;
-        let captureInterval = null;
-        
-        async function startCamera() {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { 
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        facingMode: "environment"
-                    } 
-                });
-                video.srcObject = stream;
-                document.getElementById('status').textContent = '✅ Camera Active - Detecting flowers...';
-                document.getElementById('status').style.color = '#4CAF50';
-                
-                // Capture frames every 1 second for real-time detection
-                captureInterval = setInterval(captureFrame, 1000);
-            } catch (err) {
-                document.getElementById('status').textContent = '❌ Error: ' + err.message;
-                document.getElementById('status').style.color = '#f44336';
-            }
-        }
-        
-        function stopCamera() {
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-                video.srcObject = null;
-                clearInterval(captureInterval);
-                document.getElementById('status').textContent = '⏹️ Camera Stopped';
-                document.getElementById('status').style.color = '#666';
-            }
-        }
-        
-        function captureFrame() {
-            // Draw current video frame to canvas
-            context.drawImage(video, 0, 0, 224, 224);
-            
-            // Convert canvas to base64 image
-            let imageData = canvas.toDataURL('image/jpeg', 0.9);
-            
-            // Send to Streamlit using proper method
-            const data = {
-                isStreamlitMessage: true,
-                type: "streamlit:setComponentValue",
-                value: imageData
-            };
-            window.parent.postMessage(data, "*");
-        }
-    </script>
-    """
+class VideoProcessor:
+    """Video frame processor for real-time flower detection"""
 
-    return components.html(html_code, height=650, scrolling=False)
+    def __init__(self):
+        self.model = None
+        self.labels = None
+        self.frame_count = 0
+        self.prediction_result = None
 
+    def set_model(self, model, labels):
+        """Set the model and labels for prediction"""
+        self.model = model
+        self.labels = labels
 
-def display_results(label, confidence, all_results):
-    """Display prediction results with proper formatting"""
-    emoji = "🌸" if confidence > 0.7 else "🤔" if confidence > 0.4 else "❓"
+    def recv(self, frame):
+        """Process each video frame"""
+        img = frame.to_ndarray(format="bgr24")
 
-    if confidence > 0.7:
-        st.success(f"## {emoji} {label}")
-    elif confidence > 0.4:
-        st.warning(f"## {emoji} {label}")
-    else:
-        st.error(f"## {emoji} {label}")
+        # Process every 30th frame to reduce computation
+        self.frame_count += 1
+        if self.frame_count % 30 == 0 and self.model is not None:
+            try:
+                # Convert BGR to RGB
+                img_rgb = img[:, :, ::-1]
+                pil_img = Image.fromarray(img_rgb)
 
-    st.metric("Confidence", f"{confidence * 100:.1f}%")
+                # Make prediction
+                processed = preprocess_image(pil_img)
+                predictions = self.model.predict(processed, verbose=0)
 
-    st.markdown("**All Predictions:**")
-    for lbl, prob in all_results:
-        icon = "🟢" if prob > 0.7 else "🟠" if prob > 0.4 else "🔴"
-        st.progress(prob, text=f"{icon} {lbl}: {prob * 100:.1f}%")
+                predicted_class = np.argmax(predictions[0])
+                confidence = float(predictions[0][predicted_class])
+                label = self.labels.get(predicted_class, "Unknown")
+
+                all_results = sorted(
+                    [(self.labels[i], float(predictions[0][i])) for i in self.labels],
+                    key=lambda x: -x[1],
+                )
+
+                # Store prediction in thread-safe manner
+                with prediction_lock:
+                    self.prediction_result = (label, confidence, all_results)
+
+            except Exception as e:
+                print(f"Error in frame processing: {e}")
+
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
 def main():
@@ -197,7 +158,7 @@ def main():
         st.markdown(
             """
         **Real-Time Mode:**
-        1. Click **Start Camera**
+        1. Click **START** button
         2. Allow camera access
         3. Point at a flower
         4. See live predictions!
@@ -235,88 +196,62 @@ def main():
 
     with tab1:
         st.markdown("### 🎥 Real-Time Flower Detection")
+        st.info("🎥 Live video feed with automatic flower detection!")
 
-        # Better approach: Use camera_input with auto-rerun
-        st.info(
-            "📹 Use the camera below for continuous detection (works better on mobile!)"
-        )
-
-        # Initialize session state
-        if "detection_active" not in st.session_state:
-            st.session_state.detection_active = False
-        if "frame_count" not in st.session_state:
-            st.session_state.frame_count = 0
-
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([3, 2])
 
         with col1:
-            # Button to start/stop detection
-            if st.button(
-                "🎥 Start Real-Time Detection"
-                if not st.session_state.detection_active
-                else "⏹️ Stop Detection"
-            ):
-                st.session_state.detection_active = (
-                    not st.session_state.detection_active
-                )
-                st.rerun()
+            # Initialize video processor
+            if "video_processor" not in st.session_state:
+                st.session_state.video_processor = VideoProcessor()
+                st.session_state.video_processor.set_model(model, labels)
 
-            if st.session_state.detection_active:
-                # Use camera_input with a unique key that changes
-                camera_photo = st.camera_input(
-                    "Camera Feed", key=f"realtime_camera_{st.session_state.frame_count}"
-                )
+            # WebRTC streamer for real-time video
+            webrtc_ctx = webrtc_streamer(
+                key="flower-detection",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=RTC_CONFIGURATION,
+                video_processor_factory=lambda: st.session_state.video_processor,
+                media_stream_constraints={"video": True, "audio": False},
+                async_processing=True,
+            )
 
-                if camera_photo:
-                    # Process the image immediately
-                    image = Image.open(camera_photo)
-
-                    # Make prediction
-                    with st.spinner("Analyzing..."):
-                        label, confidence, all_results = predict_flower(
-                            image, model, labels
-                        )
-
-                    # Store results
-                    st.session_state.last_prediction = (label, confidence, all_results)
-                    st.session_state.last_image = image
-
-                    # Increment frame count and rerun for continuous detection
-                    st.session_state.frame_count += 1
-                    time.sleep(0.5)  # Small delay to avoid overwhelming
-                    st.rerun()
-            else:
-                st.info("👆 Click 'Start Real-Time Detection' to begin")
+            st.markdown(
+                "**Status:** "
+                + ("🟢 Active" if webrtc_ctx.state.playing else "🔴 Stopped")
+            )
 
         with col2:
-            st.markdown("### 📊 Detection Results")
+            st.markdown("### 📊 Live Results")
 
-            # Display last image and prediction
-            if hasattr(st.session_state, "last_image") and hasattr(
-                st.session_state, "last_prediction"
-            ):
-                st.image(
-                    st.session_state.last_image,
-                    caption="Last Frame",
-                    use_container_width=True,
-                )
+            # Display predictions
+            if webrtc_ctx.state.playing:
+                result_placeholder = st.empty()
 
-                label, confidence, all_results = st.session_state.last_prediction
-                display_results(label, confidence, all_results)
+                # Check for new predictions
+                if st.session_state.video_processor.prediction_result:
+                    with prediction_lock:
+                        label, confidence, all_results = (
+                            st.session_state.video_processor.prediction_result
+                        )
 
-                st.caption(f"Frame: {st.session_state.frame_count}")
+                    with result_placeholder.container():
+                        display_results(label, confidence, all_results)
+                else:
+                    result_placeholder.info("👀 Waiting for detection...")
             else:
-                st.info("👆 No predictions yet - start detection!")
+                st.info("👆 Click 'START' above to begin real-time detection!")
 
         st.markdown(
             """
         ---
         **Tips for best results:**
+        - Allow camera access when prompted
         - Ensure good lighting
         - Center the flower in frame
         - Hold camera steady
         - Get close to the flower
-        - Works best on mobile devices
+        - Detection updates every ~1 second
         """
         )
 
@@ -324,7 +259,7 @@ def main():
         st.markdown("### 📸 Take a Photo")
         st.info("Click the button below to take a photo of a flower!")
 
-        # Camera input - simpler and more reliable than webrtc
+        # Camera input
         camera_photo = st.camera_input("Take a picture")
 
         if camera_photo:
