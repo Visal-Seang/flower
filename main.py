@@ -120,8 +120,8 @@ def create_realtime_camera():
                 document.getElementById('status').textContent = '✅ Camera Active - Detecting flowers...';
                 document.getElementById('status').style.color = '#4CAF50';
                 
-                // Capture frames every 1.5 seconds
-                captureInterval = setInterval(captureFrame, 1500);
+                // Capture frames every 1 second for real-time detection
+                captureInterval = setInterval(captureFrame, 1000);
             } catch (err) {
                 document.getElementById('status').textContent = '❌ Error: ' + err.message;
                 document.getElementById('status').style.color = '#f44336';
@@ -143,21 +143,20 @@ def create_realtime_camera():
             context.drawImage(video, 0, 0, 224, 224);
             
             // Convert canvas to base64 image
-            let imageData = canvas.toDataURL('image/jpeg', 0.8);
+            let imageData = canvas.toDataURL('image/jpeg', 0.9);
             
-            // Send to Streamlit
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
+            // Send to Streamlit using proper method
+            const data = {
+                isStreamlitMessage: true,
+                type: "streamlit:setComponentValue",
                 value: imageData
-            }, '*');
+            };
+            window.parent.postMessage(data, "*");
         }
-        
-        // Auto-start camera when loaded
-        // startCamera();
     </script>
     """
 
-    return components.html(html_code, height=650)
+    return components.html(html_code, height=650, scrolling=False)
 
 
 def display_results(label, confidence, all_results):
@@ -236,45 +235,78 @@ def main():
 
     with tab1:
         st.markdown("### 🎥 Real-Time Flower Detection")
-        st.info("Click 'Start Camera' to begin continuous flower detection!")
 
-        col1, col2 = st.columns([3, 2])
+        # Better approach: Use camera_input with auto-rerun
+        st.info(
+            "📹 Use the camera below for continuous detection (works better on mobile!)"
+        )
+
+        # Initialize session state
+        if "detection_active" not in st.session_state:
+            st.session_state.detection_active = False
+        if "frame_count" not in st.session_state:
+            st.session_state.frame_count = 0
+
+        col1, col2 = st.columns([1, 1])
 
         with col1:
-            # Real-time camera component
-            image_data = create_realtime_camera()
+            # Button to start/stop detection
+            if st.button(
+                "🎥 Start Real-Time Detection"
+                if not st.session_state.detection_active
+                else "⏹️ Stop Detection"
+            ):
+                st.session_state.detection_active = (
+                    not st.session_state.detection_active
+                )
+                st.rerun()
 
-        with col2:
-            st.markdown("### 📊 Live Results")
+            if st.session_state.detection_active:
+                # Use camera_input with a unique key that changes
+                camera_photo = st.camera_input(
+                    "Camera Feed", key=f"realtime_camera_{st.session_state.frame_count}"
+                )
 
-            # Initialize session state for results
-            if "last_prediction" not in st.session_state:
-                st.session_state.last_prediction = None
-
-            # Process captured frame if available
-            if image_data:
-                try:
-                    # Decode base64 image
-                    image_data_clean = (
-                        image_data.split(",")[1] if "," in image_data else image_data
-                    )
-                    image_bytes = base64.b64decode(image_data_clean)
-                    image = Image.open(BytesIO(image_bytes))
+                if camera_photo:
+                    # Process the image immediately
+                    image = Image.open(camera_photo)
 
                     # Make prediction
-                    label, confidence, all_results = predict_flower(
-                        image, model, labels
-                    )
-                    st.session_state.last_prediction = (label, confidence, all_results)
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    with st.spinner("Analyzing..."):
+                        label, confidence, all_results = predict_flower(
+                            image, model, labels
+                        )
 
-            # Display last prediction
-            if st.session_state.last_prediction:
+                    # Store results
+                    st.session_state.last_prediction = (label, confidence, all_results)
+                    st.session_state.last_image = image
+
+                    # Increment frame count and rerun for continuous detection
+                    st.session_state.frame_count += 1
+                    time.sleep(0.5)  # Small delay to avoid overwhelming
+                    st.rerun()
+            else:
+                st.info("👆 Click 'Start Real-Time Detection' to begin")
+
+        with col2:
+            st.markdown("### 📊 Detection Results")
+
+            # Display last image and prediction
+            if hasattr(st.session_state, "last_image") and hasattr(
+                st.session_state, "last_prediction"
+            ):
+                st.image(
+                    st.session_state.last_image,
+                    caption="Last Frame",
+                    use_container_width=True,
+                )
+
                 label, confidence, all_results = st.session_state.last_prediction
                 display_results(label, confidence, all_results)
+
+                st.caption(f"Frame: {st.session_state.frame_count}")
             else:
-                st.info("👆 Start the camera to see predictions!")
+                st.info("👆 No predictions yet - start detection!")
 
         st.markdown(
             """
@@ -284,7 +316,7 @@ def main():
         - Center the flower in frame
         - Hold camera steady
         - Get close to the flower
-        - Allow 1-2 seconds between predictions
+        - Works best on mobile devices
         """
         )
 
